@@ -406,4 +406,36 @@ def test_brush_undo_redo_and_transform_synchronization():
     assert win.alpha_mask[150, 170] == 0, "After redo, erased spot should be erased again"
 
 
+def test_app_about_dialog_and_metadata():
+    """Verify application version, author metadata, and AboutDialog rendering."""
+    import sys
+    from PyQt6.QtWidgets import QApplication, QLabel
+    from app import __app_name__, __author__, __version__
+    from app.ui.components import AboutDialog
+    from app.ui.main_window import MainWindow
+
+    assert __version__ == "1.0", f"Expected version '1.0', got '{__version__}'"
+    assert __author__ == "Vinh", f"Expected author 'Vinh', got '{__author__}'"
+    assert __app_name__ == "ID Photo Studio Master"
+
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    # Instantiate AboutDialog
+    dialog = AboutDialog()
+    assert "Giới thiệu" in dialog.windowTitle()
+
+    # Verify labels inside dialog
+    labels = dialog.findChildren(QLabel)
+    label_texts = [lbl.text() for lbl in labels]
+    assert any("Vinh" in t for t in label_texts), "Author 'Vinh' must be present in About dialog"
+    assert any("1.0" in t for t in label_texts), "Version '1.0' must be present in About dialog"
+
+    # Instantiate MainWindow and verify title and shortcuts
+    win = MainWindow()
+    assert "v1.0" in win.windowTitle()
+    assert hasattr(win, "show_about_dialog")
+    assert hasattr(win, "shortcut_about")
+
+
+
 

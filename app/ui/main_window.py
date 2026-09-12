@@ -44,12 +44,14 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from app import __app_name__, __author__, __version__
 from app.core.face_aligner import CropResult, FaceAligner, FaceFeatures
 from app.core.matting import MattingEngine, decontaminate_color, fast_guided_filter
 from app.core.psd_builder import PSDBuilder
 from app.core.retouch import FaceRetoucher
 from app.ui.components import (
     DARK_STYLESHEET,
+    AboutDialog,
     AdjustmentSlidersWidget,
     ColorPickerWidget,
     InteractiveCanvas,
@@ -124,7 +126,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self, specs_path: Optional[str] = None):
         super().__init__()
-        self.setWindowTitle("ID Photo Studio Master — Multi-Layer PSD Engine")
+        self.setWindowTitle(f"{__app_name__} v{__version__} — Multi-Layer PSD Engine")
         self.resize(1300, 850)
 
         # 1. Load Presets Configuration
@@ -285,6 +287,10 @@ class MainWindow(QMainWindow):
         btn_watch = QPushButton("👀 Thư mục chụp (Watch Folder)...")
         btn_watch.clicked.connect(self.setup_watch_folder)
         canvas_bar.addWidget(btn_watch)
+
+        btn_about = QPushButton("ℹ️ Giới thiệu (About)...")
+        btn_about.clicked.connect(self.show_about_dialog)
+        canvas_bar.addWidget(btn_about)
 
         right_layout.addLayout(canvas_bar)
 
@@ -468,6 +474,9 @@ class MainWindow(QMainWindow):
 
         self.shortcut_redo_shift = QShortcut(QKeySequence("Ctrl+Shift+Z"), self)
         self.shortcut_redo_shift.activated.connect(self.redo_brush_stroke)
+
+        self.shortcut_about = QShortcut(QKeySequence("F1"), self)
+        self.shortcut_about.activated.connect(self.show_about_dialog)
 
     def start_initial_analysis(self) -> None:
         if self.original_rgb is None:
@@ -831,6 +840,11 @@ class MainWindow(QMainWindow):
 
     def _fit_canvas(self) -> None:
         self.canvas.fit_in_view()
+
+    def show_about_dialog(self) -> None:
+        """Display the application About dialog."""
+        dialog = AboutDialog(self)
+        dialog.exec()
 
     # Watch Folder Mode
     def setup_watch_folder(self) -> None:

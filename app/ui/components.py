@@ -22,6 +22,7 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import (
     QColorDialog,
     QComboBox,
+    QDialog,
     QFrame,
     QGraphicsDropShadowEffect,
     QGridLayout,
@@ -34,6 +35,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from app import __app_name__, __author__, __version__
 from app.core.matting import hex_to_rgb, rgb_to_hex
 
 
@@ -641,3 +643,109 @@ class InteractiveCanvas(QWidget):
                 self.file_dropped.emit(file_path)
                 break
         event.acceptProposedAction()
+
+
+class AboutDialog(QDialog):
+    """Modern dark About dialog displaying version, author, and application overview."""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Giới thiệu — {__app_name__}")
+        self.setFixedSize(540, 520)
+        self.setStyleSheet(DARK_STYLESHEET)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(28, 28, 28, 24)
+        layout.setSpacing(16)
+
+        # Header with Logo & App Title
+        header_layout = QVBoxLayout()
+        header_layout.setSpacing(6)
+
+        title_lbl = QLabel(f"📸 {__app_name__}")
+        title_lbl.setStyleSheet("font-size: 20px; font-weight: 700; color: #38BDF8;")
+        header_layout.addWidget(title_lbl, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        subtitle_lbl = QLabel("Phần mềm xử lý ảnh thẻ & visa chuẩn quốc tế tự động")
+        subtitle_lbl.setStyleSheet("font-size: 13px; color: #94A3B8;")
+        header_layout.addWidget(subtitle_lbl, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        layout.addLayout(header_layout)
+
+        # Badges row: Version & Author
+        badge_layout = QHBoxLayout()
+        badge_layout.setSpacing(12)
+        badge_layout.addStretch()
+
+        ver_badge = QLabel(f"📦 Phiên bản: {__version__}")
+        ver_badge.setStyleSheet("""
+            background-color: #1E293B;
+            color: #38BDF8;
+            border: 1px solid #334155;
+            border-radius: 12px;
+            padding: 4px 12px;
+            font-size: 12px;
+            font-weight: 600;
+        """)
+        badge_layout.addWidget(ver_badge)
+
+        author_badge = QLabel(f"👤 Tác giả: {__author__}")
+        author_badge.setStyleSheet("""
+            background-color: #064E3B;
+            color: #34D399;
+            border: 1px solid #047857;
+            border-radius: 12px;
+            padding: 4px 12px;
+            font-size: 12px;
+            font-weight: 600;
+        """)
+        badge_layout.addWidget(author_badge)
+
+        badge_layout.addStretch()
+        layout.addLayout(badge_layout)
+
+        # Feature List Container
+        info_frame = QFrame()
+        info_frame.setStyleSheet("""
+            QFrame {
+                background-color: #18191E;
+                border: 1px solid #27272A;
+                border-radius: 8px;
+                padding: 12px;
+            }
+        """)
+        info_layout = QVBoxLayout(info_frame)
+        info_layout.setSpacing(10)
+
+        features = [
+            ("⚡", "<b>Tách nền AI cục bộ (CPU-Only):</b> Mô hình BRIA RMBG-1.4 lượng tử hóa mượt mà, không yêu cầu GPU."),
+            ("🌿", "<b>Bảo toàn tóc tơ & chi tiết mịn:</b> Lọc viền Fast Guided Filter giữ sợi tóc sắc nét."),
+            ("🎨", "<b>Khử lem màu viền (Spill Suppression):</b> Loại bỏ ám màu phông xanh/đỏ cũ vào tóc và áo."),
+            ("📐", "<b>Căn chỉnh sinh trắc học chuẩn xác:</b> Nhận diện 478 mốc khuôn mặt, xoay thẳng góc nghiêng (Roll)."),
+            ("🧹", "<b>Bộ công cụ cọ tẩy & chỉnh sửa da:</b> Xóa tóc thừa dính viền, mịn da, nét ảnh kèm Undo/Redo (Ctrl+Z / Ctrl+Y)."),
+            ("📁", "<b>Xuất Photoshop (.psd) đa lớp:</b> Layer Mask 8-bit nguyên bản, không làm bẹp layer, hỗ trợ phôi in 10x15 cm.")
+        ]
+
+        for icon, desc in features:
+            item_lbl = QLabel(f"{icon}  {desc}")
+            item_lbl.setWordWrap(True)
+            item_lbl.setStyleSheet("color: #E2E8F0; font-size: 12px; line-height: 1.4;")
+            info_layout.addWidget(item_lbl)
+
+        layout.addWidget(info_frame)
+
+        layout.addStretch()
+
+        # Bottom row with Close button
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+
+        btn_close = QPushButton("Đóng")
+        btn_close.setProperty("class", "primary")
+        btn_close.setFixedWidth(110)
+        btn_close.clicked.connect(self.accept)
+        btn_layout.addWidget(btn_close)
+        btn_layout.addStretch()
+
+        layout.addLayout(btn_layout)
+

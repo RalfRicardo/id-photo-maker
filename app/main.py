@@ -16,6 +16,7 @@ project_root = os.path.dirname(current_dir)
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+from app import __app_name__, __author__, __version__
 from app.core.face_aligner import FaceAligner
 from app.core.matting import MattingEngine
 from app.core.psd_builder import PSDBuilder
@@ -112,8 +113,9 @@ def run_gui() -> int:
 
     # Enable High-DPI scaling
     app = QApplication(sys.argv)
-    app.setApplicationName("ID Photo Studio Master")
-    app.setOrganizationName("PhotoStudio")
+    app.setApplicationName(__app_name__)
+    app.setApplicationVersion(__version__)
+    app.setOrganizationName(__author__)
 
     window = MainWindow()
     window.show()
@@ -121,7 +123,10 @@ def run_gui() -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="ID Photo Maker - Auto align, matte, and export to multi-layer PSD.")
+    parser = argparse.ArgumentParser(
+        description=f"{__app_name__} v{__version__} by {__author__} - Auto align, matte, and export to multi-layer PSD."
+    )
+    parser.add_argument("--version", "-v", action="version", version=f"{__app_name__} v{__version__} (Author: {__author__})")
     parser.add_argument("--input", "-i", type=str, help="Path to input portrait image (JPG/PNG)")
     parser.add_argument("--output", "-o", type=str, help="Destination path for output .psd file")
     parser.add_argument("--preset", "-p", type=str, default="3x4_vn", help="Preset ID: 3x4_vn, 4x6_vn, 2x2_us_visa, 35x45_schengen")

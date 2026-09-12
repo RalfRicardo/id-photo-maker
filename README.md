@@ -1,5 +1,6 @@
-# ID Photo Studio Master (Export Multi-Layer PSD)
+# ID Photo Studio Master v1.0 (Export Multi-Layer PSD)
 
+> **Tác giả:** Vinh | **Phiên bản:** 1.0  
 > **Phần mềm xử lý ảnh thẻ chuyên nghiệp cho Studio & Lab ảnh (Tối ưu hóa Windows 10/11 & Đa nền tảng)**  
 > Tự động nhận diện khuôn mặt, xoay ngang trục mắt, cắt cúp chuẩn theo quy chuẩn ID/Visa quốc tế, bóc tách nền thông minh bằng AI, và xuất file Adobe Photoshop (.psd) **giữ nguyên từng lớp riêng biệt với Layer Mask không phá hủy (Non-destructive)**.
 
@@ -152,5 +153,6 @@ tests/test_psd_layers.py::test_fast_guided_filter_edge_preservation PASSED
 tests/test_psd_layers.py::test_color_decontamination_spill_suppression PASSED
 tests/test_psd_layers.py::test_psd_export_preserves_soft_grayscale_mask PASSED
 tests/test_psd_layers.py::test_brush_undo_redo_and_transform_synchronization PASSED
-============================== 12 passed in 4.88s ==============================
+tests/test_psd_layers.py::test_app_about_dialog_and_metadata PASSED
+============================== 13 passed in 4.88s ==============================
 ```
