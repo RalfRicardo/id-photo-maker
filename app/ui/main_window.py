@@ -20,7 +20,7 @@ from PyQt6.QtCore import (
     pyqtSignal,
     pyqtSlot,
 )
-from PyQt6.QtGui import QAction, QColor, QFont, QIcon, QKeySequence
+from PyQt6.QtGui import QAction, QColor, QFont, QIcon, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -154,7 +154,12 @@ class MainWindow(QMainWindow):
         self.watch_folder_path: Optional[str] = None
         self.watcher: Optional[QFileSystemWatcher] = None
         self.worker: Optional[AnalysisWorker] = None
-        self.manual_brush_delta: Optional[np.ndarray] = None
+
+        # Brush strokes in base image coordinates for lockstep transformation with zoom/pan/shift/tilt
+        self.base_brush_delta: Optional[np.ndarray] = None
+        self.undo_strokes: List[Dict[str, Any]] = []
+        self.redo_strokes: List[Dict[str, Any]] = []
+        self.current_stroke: Optional[Dict[str, Any]] = None
 
         # Debounce timer for slider adjustments (15ms debounce for silky smooth 60fps)
         self.slider_timer = QTimer(self)
@@ -162,9 +167,10 @@ class MainWindow(QMainWindow):
         self.slider_timer.setInterval(15)
         self.slider_timer.timeout.connect(self._apply_adjustments_fast)
 
-        # 4. Setup UI
+        # 4. Setup UI & Shortcuts
         self.setStyleSheet(DARK_STYLESHEET)
         self._init_ui()
+        self._setup_shortcuts()
 
     def _default_specs_path(self) -> str:
         current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -335,6 +341,20 @@ class MainWindow(QMainWindow):
 
         self.tool_group.buttonClicked.connect(self._on_tool_changed)
 
+        # Undo / Redo buttons
+        tool_layout.addSpacing(6)
+        self.btn_undo = QPushButton("↩ Hoàn tác (Ctrl+Z)")
+        self.btn_undo.setToolTip("Hoàn tác nét vẽ cọ gần nhất (Ctrl+Z)")
+        self.btn_undo.setEnabled(False)
+        self.btn_undo.clicked.connect(self.undo_brush_stroke)
+        tool_layout.addWidget(self.btn_undo)
+
+        self.btn_redo = QPushButton("↪ Làm lại (Ctrl+Y)")
+        self.btn_redo.setToolTip("Làm lại nét vẽ cọ vừa hoàn tác (Ctrl+Y / Ctrl+Shift+Z)")
+        self.btn_redo.setEnabled(False)
+        self.btn_redo.clicked.connect(self.redo_brush_stroke)
+        tool_layout.addWidget(self.btn_redo)
+
         tool_layout.addSpacing(10)
         lbl_size = QLabel("Cỡ cọ:")
         lbl_size.setStyleSheet("color: #A1A1AA; font-size: 12px;")
@@ -354,7 +374,7 @@ class MainWindow(QMainWindow):
         tool_layout.addStretch()
 
         self.btn_reset_mask = QPushButton("↺ Khôi phục mặt nạ gốc")
-        self.btn_reset_mask.setToolTip("Khôi phục lại mặt nạ bóc tách AI gốc (hủy bỏ nét tẩy)")
+        self.btn_reset_mask.setToolTip("Khôi phục lại mặt nạ bóc tách AI gốc (hủy bỏ toàn bộ nét tẩy)")
         self.btn_reset_mask.clicked.connect(self._reset_mask_to_original)
         tool_layout.addWidget(self.btn_reset_mask)
 
@@ -363,7 +383,9 @@ class MainWindow(QMainWindow):
         # Interactive Canvas
         self.canvas = InteractiveCanvas()
         self.canvas.file_dropped.connect(self.load_image_file)
+        self.canvas.brush_started.connect(self._on_canvas_brush_started)
         self.canvas.brush_painted.connect(self._on_canvas_brush_painted)
+        self.canvas.brush_ended.connect(self._on_canvas_brush_ended)
         right_layout.addWidget(self.canvas, stretch=1)
 
         # Progress bar
@@ -427,10 +449,25 @@ class MainWindow(QMainWindow):
         self.base_features = None
         self.base_alpha_mask = None
         self.clean_rgb = None
-        self.manual_brush_delta = None
+        self.base_brush_delta = None
+        self.undo_strokes.clear()
+        self.redo_strokes.clear()
+        self.current_stroke = None
+        self._update_undo_redo_actions()
 
         # Start initial analysis in worker thread
         self.start_initial_analysis()
+
+    def _setup_shortcuts(self) -> None:
+        """Register global keyboard shortcuts for Undo / Redo."""
+        self.shortcut_undo = QShortcut(QKeySequence("Ctrl+Z"), self)
+        self.shortcut_undo.activated.connect(self.undo_brush_stroke)
+
+        self.shortcut_redo = QShortcut(QKeySequence("Ctrl+Y"), self)
+        self.shortcut_redo.activated.connect(self.redo_brush_stroke)
+
+        self.shortcut_redo_shift = QShortcut(QKeySequence("Ctrl+Shift+Z"), self)
+        self.shortcut_redo_shift.activated.connect(self.redo_brush_stroke)
 
     def start_initial_analysis(self) -> None:
         if self.original_rgb is None:
@@ -538,10 +575,18 @@ class MainWindow(QMainWindow):
             refined_float = fast_guided_filter(guide=gray_crop, src=cropped_mask, radius=r, eps=1e-4)
             cropped_mask = (refined_float * 255.0).clip(0, 255).astype(np.uint8)
 
-        # 5. Apply manual brush strokes (eraser / restore) if any
-        if self.manual_brush_delta is not None and self.manual_brush_delta.shape == (target_h, target_w):
-            cropped_mask = np.where(self.manual_brush_delta == -1, 0, cropped_mask)
-            cropped_mask = np.where(self.manual_brush_delta == 1, 255, cropped_mask)
+        # 5. Warp and apply manual brush strokes in lockstep with the portrait
+        if self.base_brush_delta is not None and self.crop_res is not None:
+            warped_delta = cv2.warpAffine(
+                self.base_brush_delta,
+                self.crop_res.transform_matrix,
+                (target_w, target_h),
+                flags=cv2.INTER_NEAREST,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=0
+            )
+            cropped_mask = np.where(warped_delta == -1, 0, cropped_mask)
+            cropped_mask = np.where(warped_delta == 1, 255, cropped_mask)
 
         self.alpha_mask = cropped_mask
 
@@ -557,10 +602,10 @@ class MainWindow(QMainWindow):
     def _on_tool_changed(self, button: QPushButton) -> None:
         if button == self.btn_tool_eraser:
             self.canvas.set_tool_mode("eraser")
-            self.status_bar.showMessage("🧹 Chế độ cọ tẩy: Nhấn và kéo chuột trên ảnh để xóa tóc thừa hoặc viền áo dính nền.")
+            self.status_bar.showMessage("🧹 Chế độ cọ tẩy: Nhấn và kéo chuột trên ảnh để xóa tóc thừa hoặc viền áo dính nền (Ctrl+Z để hoàn tác).")
         elif button == self.btn_tool_restore:
             self.canvas.set_tool_mode("restore")
-            self.status_bar.showMessage("🖌️ Chế độ khôi phục: Nhấn và kéo chuột để lấy lại các chi tiết tóc/áo đã bị xóa.")
+            self.status_bar.showMessage("🖌️ Chế độ khôi phục: Nhấn và kéo chuột để lấy lại các chi tiết tóc/áo đã bị xóa (Ctrl+Z để hoàn tác).")
         else:
             self.canvas.set_tool_mode("pan")
             self.status_bar.showMessage("🖐️ Chế độ di chuyển: Kéo chuột để di chuyển ảnh, lăn chuột để phóng to/thu nhỏ.")
@@ -569,29 +614,132 @@ class MainWindow(QMainWindow):
         self.lbl_brush_size.setText(f"{val} px")
         self.canvas.set_brush_radius(val)
 
-    def _on_canvas_brush_painted(self, img_x: float, img_y: float, radius: int, mode: str) -> None:
-        if self.alpha_mask is None or self.crop_res is None:
+    def _map_crop_to_base(self, img_x: float, img_y: float, radius: int) -> Tuple[float, float, int]:
+        """Convert cropped canvas coordinates to base image space using inverse affine transform."""
+        if self.crop_res is None or self.original_rgb is None:
+            return img_x, img_y, radius
+
+        M = self.crop_res.transform_matrix
+        M_inv = cv2.invertAffineTransform(M)
+        pt_base = M_inv @ np.array([img_x, img_y, 1.0], dtype=np.float64)
+        bx = float(pt_base[0])
+        by = float(pt_base[1])
+
+        scale = np.sqrt(M[0, 0] ** 2 + M[0, 1] ** 2)
+        base_r = max(1, int(round(radius / max(1e-4, scale))))
+        return bx, by, base_r
+
+    def _on_canvas_brush_started(self, img_x: float, img_y: float, radius: int, mode: str) -> None:
+        if self.crop_res is None or self.original_rgb is None:
             return
 
-        h, w = self.alpha_mask.shape[:2]
-        if self.manual_brush_delta is None or self.manual_brush_delta.shape != (h, w):
-            self.manual_brush_delta = np.zeros((h, w), dtype=np.int8)
+        bx, by, base_r = self._map_crop_to_base(img_x, img_y, radius)
+        h, w = self.original_rgb.shape[:2]
 
-        # Update manual delta
-        val_delta = -1 if mode == "eraser" else 1
-        cv2.circle(self.manual_brush_delta, (int(round(img_x)), int(round(img_y))), int(radius), val_delta, -1, lineType=cv2.LINE_AA)
+        if self.base_brush_delta is None or self.base_brush_delta.shape != (h, w):
+            self.base_brush_delta = np.zeros((h, w), dtype=np.int8)
 
-        # Mutate active alpha_mask immediately
-        val_mask = 0 if mode == "eraser" else 255
-        cv2.circle(self.alpha_mask, (int(round(img_x)), int(round(img_y))), int(radius), val_mask, -1, lineType=cv2.LINE_AA)
+        # Clear redo history upon new stroke
+        self.redo_strokes.clear()
+        self.current_stroke = {
+            "mode": mode,
+            "base_radius": base_r,
+            "points": [(bx, by)]
+        }
 
-        # Instantaneous redraw of preview canvas
-        self._update_preview()
+        val = -1 if mode == "eraser" else 1
+        cv2.circle(self.base_brush_delta, (int(round(bx)), int(round(by))), base_r, val, -1)
+        self._apply_adjustments_fast()
+
+    def _on_canvas_brush_painted(self, img_x: float, img_y: float, radius: int, mode: str) -> None:
+        if self.crop_res is None or self.original_rgb is None or self.current_stroke is None:
+            return
+
+        bx, by, _ = self._map_crop_to_base(img_x, img_y, radius)
+        h, w = self.original_rgb.shape[:2]
+
+        if self.base_brush_delta is None or self.base_brush_delta.shape != (h, w):
+            self.base_brush_delta = np.zeros((h, w), dtype=np.int8)
+
+        last_bx, last_by = self.current_stroke["points"][-1]
+        base_r = self.current_stroke["base_radius"]
+        val = -1 if mode == "eraser" else 1
+
+        p1 = (int(round(last_bx)), int(round(last_by)))
+        p2 = (int(round(bx)), int(round(by)))
+        cv2.line(self.base_brush_delta, p1, p2, val, base_r * 2)
+        cv2.circle(self.base_brush_delta, p2, base_r, val, -1)
+
+        self.current_stroke["points"].append((bx, by))
+        self._apply_adjustments_fast()
+
+    def _on_canvas_brush_ended(self) -> None:
+        if self.current_stroke is not None and len(self.current_stroke["points"]) > 0:
+            self.undo_strokes.append(self.current_stroke)
+            self.current_stroke = None
+            self._update_undo_redo_actions()
+            self.status_bar.showMessage(f"✓ Đã áp dụng nét cọ ({len(self.undo_strokes)} nét) — Nhấn Ctrl+Z để hoàn tác")
+
+    def undo_brush_stroke(self) -> None:
+        """Undo last brush stroke (Ctrl+Z)."""
+        if not self.undo_strokes:
+            self.status_bar.showMessage("Không có thao tác nào để hoàn tác (Undo).")
+            return
+
+        stroke = self.undo_strokes.pop()
+        self.redo_strokes.append(stroke)
+        self._replay_brush_strokes()
+        self._apply_adjustments_fast()
+        self._update_undo_redo_actions()
+        self.status_bar.showMessage(f"↩ Đã hoàn tác (Ctrl+Z) — Còn lại {len(self.undo_strokes)} nét")
+
+    def redo_brush_stroke(self) -> None:
+        """Redo previously undone brush stroke (Ctrl+Y / Ctrl+Shift+Z)."""
+        if not self.redo_strokes:
+            self.status_bar.showMessage("Không có thao tác nào để làm lại (Redo).")
+            return
+
+        stroke = self.redo_strokes.pop()
+        self.undo_strokes.append(stroke)
+        self._replay_brush_strokes()
+        self._apply_adjustments_fast()
+        self._update_undo_redo_actions()
+        self.status_bar.showMessage(f"↪ Đã làm lại (Ctrl+Y) — Tổng cộng {len(self.undo_strokes)} nét")
+
+    def _replay_brush_strokes(self) -> None:
+        """Reconstruct base_brush_delta from the active undo_strokes list."""
+        if self.original_rgb is None:
+            self.base_brush_delta = None
+            return
+
+        h, w = self.original_rgb.shape[:2]
+        self.base_brush_delta = np.zeros((h, w), dtype=np.int8)
+
+        for stroke in self.undo_strokes:
+            val = -1 if stroke["mode"] == "eraser" else 1
+            r = stroke["base_radius"]
+            pts = stroke["points"]
+            for i in range(len(pts)):
+                pt = (int(round(pts[i][0])), int(round(pts[i][1])))
+                cv2.circle(self.base_brush_delta, pt, r, val, -1)
+                if i > 0:
+                    prev_pt = (int(round(pts[i - 1][0])), int(round(pts[i - 1][1])))
+                    cv2.line(self.base_brush_delta, prev_pt, pt, val, r * 2)
+
+    def _update_undo_redo_actions(self) -> None:
+        can_undo = len(self.undo_strokes) > 0
+        can_redo = len(self.redo_strokes) > 0
+        self.btn_undo.setEnabled(can_undo)
+        self.btn_redo.setEnabled(can_redo)
 
     def _reset_mask_to_original(self) -> None:
         if self.crop_res is None:
             return
-        self.manual_brush_delta = None
+        self.undo_strokes.clear()
+        self.redo_strokes.clear()
+        self.current_stroke = None
+        self.base_brush_delta = None
+        self._update_undo_redo_actions()
         self._apply_adjustments_fast()
         self.status_bar.showMessage("✓ Đã khôi phục lại mặt nạ bóc tách AI gốc.")
 
@@ -824,6 +972,17 @@ class MainWindow(QMainWindow):
                             borderMode=cv2.BORDER_CONSTANT,
                             borderValue=0
                         )
+                        if self.base_brush_delta is not None:
+                            w_delta = cv2.warpAffine(
+                                self.base_brush_delta,
+                                c_res.transform_matrix,
+                                (c_res.target_width, c_res.target_height),
+                                flags=cv2.INTER_NEAREST,
+                                borderMode=cv2.BORDER_CONSTANT,
+                                borderValue=0
+                            )
+                            c_mask = np.where(w_delta == -1, 0, c_mask)
+                            c_mask = np.where(w_delta == 1, 255, c_mask)
                     else:
                         c_mask = cv2.resize(self.alpha_mask, (c_res.target_width, c_res.target_height))
                     photo_crops[pid] = (cropped_rgb, c_mask, self.bg_color)

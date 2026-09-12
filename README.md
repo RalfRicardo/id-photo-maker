@@ -27,6 +27,8 @@
    - **Công cụ cọ tẩy & Khôi phục nét thủ công (Interactive Eraser / Restore Brush):**
      - **🧹 Chế độ tẩy (Eraser):** Nút công cụ riêng cho phép rê chuột xóa các sợi tóc bay thừa hoặc mép áo dính vào màu nền cũ.
      - **🖌️ Chế độ khôi phục (Restore):** Quét chuột để lấy lại các chi tiết tóc mai hoặc nếp áo lỡ bị AI bóc nhầm.
+     - **↩ Hoàn tác & ↪ Làm lại (Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z):** Hỗ trợ đầy đủ phím tắt và nút bấm Undo/Redo cho từng nét cọ vẽ.
+     - **Đồng bộ hóa nét tẩy theo chuyển động ảnh (Lockstep Motion):** Nét cọ được gắn chặt vào không gian tọa độ chân dung gốc. Khi phóng to/thu nhỏ (Zoom), dịch chuyển tọa độ (X/Y Shift) hay xoay góc nghiêng (Tilt), phần bị tẩy xóa **tự động di chuyển và xoay bám dính theo sợi tóc**, không bao giờ bị lệch vị trí.
      - **Tùy chỉnh cỡ cọ & Khôi phục gốc:** Thanh trượt kích thước cọ trực quan kèm vòng tròn dẫn hướng và nút "Khôi phục mặt nạ gốc" bất cứ lúc nào.
      - Mọi nét cọ vẽ thủ công được **đồng bộ trực tiếp vào Layer Mask** của file `.psd` khi xuất, không làm hỏng pixel ảnh gốc.
    - **Huy hiệu kiểm định sinh trắc học (Biometric Compliance Badge):** Báo ngay màu xanh `✓ ĐẠT CHUẨN` hoặc cảnh báo màu cam nếu tỉ lệ đầu/mắt chưa đạt.
@@ -149,5 +151,6 @@ tests/test_psd_layers.py::test_matting_engine_cpu_execution PASSED
 tests/test_psd_layers.py::test_fast_guided_filter_edge_preservation PASSED
 tests/test_psd_layers.py::test_color_decontamination_spill_suppression PASSED
 tests/test_psd_layers.py::test_psd_export_preserves_soft_grayscale_mask PASSED
-============================== 11 passed in 4.73s ==============================
+tests/test_psd_layers.py::test_brush_undo_redo_and_transform_synchronization PASSED
+============================== 12 passed in 4.88s ==============================
 ```

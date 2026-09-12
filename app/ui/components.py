@@ -404,6 +404,7 @@ class InteractiveCanvas(QWidget):
     """
 
     file_dropped = pyqtSignal(str)
+    brush_started = pyqtSignal(float, float, int, str)  # img_x, img_y, radius, mode
     brush_painted = pyqtSignal(float, float, int, str)  # img_x, img_y, radius, mode
     brush_ended = pyqtSignal()
 
@@ -592,7 +593,11 @@ class InteractiveCanvas(QWidget):
         self._mouse_pos = event.position()
         if self.tool_mode in ("eraser", "restore") and event.button() == Qt.MouseButton.LeftButton:
             self._is_brushing = True
-            self._apply_brush_at(event.position())
+            if self.pixmap and not self.pixmap.isNull():
+                scale = self.zoom_factor
+                img_x = (self._mouse_pos.x() - self.pan_offset.x()) / scale
+                img_y = (self._mouse_pos.y() - self.pan_offset.y()) / scale
+                self.brush_started.emit(img_x, img_y, self.brush_radius, self.tool_mode)
         elif event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.MiddleButton):
             self._is_panning = True
             self._drag_start = event.position() - self.pan_offset

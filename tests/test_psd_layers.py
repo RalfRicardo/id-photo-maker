@@ -345,3 +345,65 @@ def test_psd_export_preserves_soft_grayscale_mask(sample_data):
         np.testing.assert_array_equal(layer_mask_np, soft_mask)
 
 
+def test_brush_undo_redo_and_transform_synchronization():
+    """Verify brush strokes move in lockstep with zoom/shifts and support Ctrl+Z / Ctrl+Y."""
+    import sys
+    from PyQt6.QtWidgets import QApplication
+    from app.ui.main_window import MainWindow
+    from app.core.face_aligner import FaceFeatures
+
+    os.environ["QT_QPA_PLATFORM"] = "offscreen"
+    app = QApplication.instance() or QApplication(sys.argv)
+    win = MainWindow()
+
+    dummy_feat = FaceFeatures(
+        left_eye=(150.0, 180.0),
+        right_eye=(250.0, 180.0),
+        eyes_center=(200.0, 180.0),
+        chin=(200.0, 320.0),
+        forehead=(200.0, 100.0),
+        crown=(200.0, 80.0),
+        nose_tip=(200.0, 220.0),
+        roll_angle_deg=0.0,
+        face_height=240.0,
+        eye_to_chin_dist=140.0
+    )
+    win.original_rgb = np.full((600, 500, 3), 200, dtype=np.uint8)
+    win.base_features = dummy_feat
+    win.base_alpha_mask = np.full((600, 500), 255, dtype=np.uint8)
+    win.clean_rgb = win.original_rgb.copy()
+
+    win._apply_adjustments_fast()
+    assert win.crop_res is not None
+
+    # Paint a stroke with eraser at crop coordinates (150, 150)
+    win._on_canvas_brush_started(150.0, 150.0, 15, "eraser")
+    win._on_canvas_brush_painted(155.0, 155.0, 15, "eraser")
+    win._on_canvas_brush_ended()
+
+    assert len(win.undo_strokes) == 1
+    assert win.btn_undo.isEnabled()
+    assert win.alpha_mask[150, 150] == 0
+
+    # Lockstep movement: Shift X by +20px
+    win.sliders_widget.slider_x.setValue(20)
+    win._apply_adjustments_fast()
+
+    # The erased spot moves with X shift
+    assert win.alpha_mask[150, 170] == 0, "Erased spot must follow X shift"
+    assert win.alpha_mask[150, 150] == 255, "Old coordinate should no longer be erased"
+
+    # Undo (Ctrl+Z)
+    win.undo_brush_stroke()
+    assert len(win.undo_strokes) == 0
+    assert len(win.redo_strokes) == 1
+    assert win.alpha_mask[150, 170] == 255, "After undo, erased spot should be restored"
+
+    # Redo (Ctrl+Y)
+    win.redo_brush_stroke()
+    assert len(win.undo_strokes) == 1
+    assert len(win.redo_strokes) == 0
+    assert win.alpha_mask[150, 170] == 0, "After redo, erased spot should be erased again"
+
+
+
