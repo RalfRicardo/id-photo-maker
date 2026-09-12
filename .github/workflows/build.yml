@@ -25,8 +25,7 @@ jobs:
 
     - name: Build with PyInstaller
       run: |
-        pyinstaller --noconsole --onefile --paths app app/main.py
-      # Lưu ý: Đổi `main.py` thành tên file script khởi chạy chính của bạn
+        pyinstaller --noconsole --onefile --paths app --add-data "app/presets;app/presets" --add-data "app/models;app/models" app/main.py
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4

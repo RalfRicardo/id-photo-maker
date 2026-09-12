@@ -59,8 +59,10 @@ def run_headless(
     crop_res = aligner.process(rgb, spec)
     print(f"[CLI] Auto-corrected roll angle: {crop_res.features.roll_angle_deg:+.2f}°")
 
-    print("[CLI] Extracting AI alpha matte (rembg)...")
-    alpha_mask = matting.extract_alpha_matte(crop_res.cropped_image)
+    print("[CLI] Extracting AI alpha matte (RMBG-1.4 + Guided Filter)...")
+    alpha_mask = matting.extract_alpha_matte(crop_res.cropped_image, refine_edges=True, radius=6, eps=1e-4)
+    print("[CLI] Decontaminating color fringes...")
+    crop_res.cropped_image = matting.decontaminate(crop_res.cropped_image, alpha_mask)
 
     print(f"[CLI] Exporting multi-layer PSD: {output_psd}...")
     fc = crop_res.features_in_crop

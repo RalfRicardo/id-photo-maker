@@ -45,7 +45,7 @@ from PyQt6.QtWidgets import (
 )
 
 from app.core.face_aligner import CropResult, FaceAligner, FaceFeatures
-from app.core.matting import MattingEngine
+from app.core.matting import MattingEngine, decontaminate_color, fast_guided_filter
 from app.core.psd_builder import PSDBuilder
 from app.core.retouch import FaceRetoucher
 from app.ui.components import (
@@ -61,10 +61,12 @@ class AnalysisWorker(QThread):
     """
     Background worker thread that runs once per loaded image:
     1. Detects facial landmarks with MediaPipe FaceLandmarker.
-    2. Runs neural AI background removal (rembg) on the base image once.
+    2. Runs CPU-optimized neural AI background removal (BRIA RMBG-1.4 ONNX).
+    3. Refines fine hair boundaries via Fast Guided Filter.
+    4. Performs Color Decontamination (Spill Suppression) to neutralize background color bleed.
     """
 
-    finished = pyqtSignal(object, object, str)  # base_features, base_alpha_mask, error_msg
+    finished = pyqtSignal(object, object, object, str)  # base_features, base_alpha_mask, clean_rgb, error_msg
     progress = pyqtSignal(str, int)
 
     def __init__(
@@ -84,7 +86,7 @@ class AnalysisWorker(QThread):
 
     def run(self) -> None:
         try:
-            self.progress.emit("Đang phát hiện mốc khuôn mặt sinh trắc học...", 25)
+            self.progress.emit("Đang phát hiện mốc khuôn mặt sinh trắc học...", 20)
             if self._is_cancelled:
                 return
 
@@ -92,18 +94,29 @@ class AnalysisWorker(QThread):
             if self._is_cancelled:
                 return
 
-            self.progress.emit("Đang trích xuất lớp mặt nạ AI (rembg)...", 60)
+            self.progress.emit("Đang tách nền AI CPU & viền tóc (RMBG-1.4 + Guided Filter)...", 50)
             alpha_mask = self.matting_engine.extract_alpha_matte(
                 self.rgb_image,
-                feather_radius=0.0  # Base mask stored raw; feathering applied during warp
+                feather_radius=0.0,
+                refine_edges=True,
+                radius=6,
+                eps=1e-4
+            )
+            if self._is_cancelled:
+                return
+
+            self.progress.emit("Đang khử lem màu nền cũ (Color Decontamination)...", 80)
+            clean_rgb = self.matting_engine.decontaminate(
+                self.rgb_image,
+                alpha_mask
             )
             if self._is_cancelled:
                 return
 
             self.progress.emit("Hoàn tất phân tích!", 100)
-            self.finished.emit(features, alpha_mask, "")
+            self.finished.emit(features, alpha_mask, clean_rgb, "")
         except Exception as ex:
-            self.finished.emit(None, None, str(ex))
+            self.finished.emit(None, None, None, str(ex))
 
 
 class MainWindow(QMainWindow):
@@ -128,6 +141,7 @@ class MainWindow(QMainWindow):
         # 3. State Variables
         self.current_image_path: Optional[str] = None
         self.original_rgb: Optional[np.ndarray] = None
+        self.clean_rgb: Optional[np.ndarray] = None
         self.base_features: Optional[FaceFeatures] = None
         self.base_alpha_mask: Optional[np.ndarray] = None
 
@@ -412,6 +426,7 @@ class MainWindow(QMainWindow):
         self.sliders_widget.reset_values()
         self.base_features = None
         self.base_alpha_mask = None
+        self.clean_rgb = None
         self.manual_brush_delta = None
 
         # Start initial analysis in worker thread
@@ -447,6 +462,7 @@ class MainWindow(QMainWindow):
         self,
         base_features: Optional[FaceFeatures],
         base_alpha_mask: Optional[np.ndarray],
+        clean_rgb: Optional[np.ndarray],
         err_msg: str
     ) -> None:
         self.progress_bar.setVisible(False)
@@ -457,6 +473,7 @@ class MainWindow(QMainWindow):
 
         self.base_features = base_features
         self.base_alpha_mask = base_alpha_mask
+        self.clean_rgb = clean_rgb if clean_rgb is not None else self.original_rgb
 
         # Immediately run instantaneous fast-path adjustment
         self._apply_adjustments_fast()
@@ -476,9 +493,10 @@ class MainWindow(QMainWindow):
         target_w = int(spec.get("width_px", 354))
         target_h = int(spec.get("height_px", 472))
 
-        # 1. Fast geometric alignment using cached landmarks
+        # 1. Fast geometric alignment using cached landmarks and color-decontaminated RGB
+        source_rgb = self.clean_rgb if self.clean_rgb is not None else self.original_rgb
         self.crop_res = self.aligner.process(
-            rgb_image=self.original_rgb,
+            rgb_image=source_rgb,
             preset_spec=spec,
             scale_offset=adjustments.get("scale_offset", 0.0),
             x_shift_px=adjustments.get("x_shift_px", 0.0),
@@ -512,16 +530,13 @@ class MainWindow(QMainWindow):
         else:
             cropped_mask = np.full((target_h, target_w), 255, dtype=np.uint8)
 
-        # 4. Fast feathering if requested
+        # 4. Fast hair / edge guided refinement using Fast Guided Filter
         feather = adjustments.get("feather_radius", 1.0)
         if feather > 0.1:
-            k = int(round(feather * 2 + 1))
-            if k % 2 == 0:
-                k += 1
-            blurred = cv2.GaussianBlur(cropped_mask, (k, k), feather)
-            edge = cv2.Canny(cropped_mask, 50, 200)
-            edge = cv2.dilate(edge, np.ones((k, k), np.uint8))
-            cropped_mask = np.where(edge > 0, blurred, cropped_mask)
+            r = max(2, min(int(round(feather * 3 + 1)), 16))
+            gray_crop = cv2.cvtColor(cropped_rgb, cv2.COLOR_RGB2GRAY)
+            refined_float = fast_guided_filter(guide=gray_crop, src=cropped_mask, radius=r, eps=1e-4)
+            cropped_mask = (refined_float * 255.0).clip(0, 255).astype(np.uint8)
 
         # 5. Apply manual brush strokes (eraser / restore) if any
         if self.manual_brush_delta is not None and self.manual_brush_delta.shape == (target_h, target_w):

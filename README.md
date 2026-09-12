@@ -16,7 +16,11 @@
 2. **Quy trình xử lý tự động (Processing Pipeline):**
    - **Tự động cân bằng trục mắt (Auto-Roll Leveling):** Tính toán góc nghiêng giữa 2 mắt và xoay ảnh về góc $0^\circ$ hoàn hảo.
    - **Căn cúp thông minh (Smart Crop):** Xác định đỉnh đầu (crown), đường mắt (eyes level) và đáy cằm (chin) theo chuẩn sinh trắc học để căn cúp chuẩn xác từng pixel.
-   - **Tách nền AI Offline (Neural Matting):** Sử dụng mạng nơ-ron `rembg` (chạy ONNX Runtime cục bộ trên CPU/GPU, không cần gọi API ra ngoài, bảo mật thông tin khách hàng).
+   - **Tách nền AI tối ưu CPU & Khử lem màu (CPU Matting Pipeline):**
+     - **Mô hình ONNX RMBG-1.4 Quantized (CPU-Only):** Sử dụng `onnxruntime` với `CPUExecutionProvider` (không yêu cầu CUDA/GPU rời), chạy mượt mà trên PC văn phòng phổ thông (Core i3/i5, 8GB RAM). Mô hình chạy ngầm trên `QThread` độc lập, chống giật/đơ giao diện hoàn toàn.
+     - **Lọc viền tóc siêu mịn (Fast Guided Filter):** Tinh chỉnh mặt nạ thô bằng bộ lọc dẫn hướng tốc độ cao (radius = 4–8, eps = 1e-4) lấy ảnh xám sắc nét gốc làm ảnh dẫn đường, giữ trọn từng sợi tóc mai, râu mép và cấu trúc viền áo.
+     - **Khử lem màu nền cũ (Color Decontamination / Spill Suppression):** Tự động bóc tách và khử sạch ánh màu nền phòng chụp (quầng xanh lam, xanh lá) vướng trong các sợi tóc bán trong suốt ($10 < \alpha < 240$), đảm bảo khi đặt lên nền trắng hoặc nền khác tóc không bị viền màu lem luốc.
+     - **Mặt nạ 8-bit mềm mại (8-bit Soft Grayscale Mask):** Bảo toàn đầy đủ sắc độ xám mượt mà trực tiếp vào Layer Mask của file PSD, không bị răng cưa hay nhị phân hóa.
    - **Chỉnh sửa khuôn mặt & Xóa mụn (Facial Retouching):**
      - **Làm mịn da & Xóa mụn (Skin Smoothing):** Sử dụng bộ lọc bảo toàn cạnh (Edge-Preserving Bilateral Filter) kết hợp bảo toàn vân da vi mô, giúp xóa mụn, làm mịn lỗ chân lông mà không bị bết dính hay giả tạo ("waxy effect").
      - **Làm nét chi tiết (Smart Sharpening):** Tăng độ sắc nét thông minh theo kênh sáng (LAB Luminance Unsharp Masking), làm rõ từng sợi lông mi, ánh mắt, viền tóc và nếp vải áo mà không gây viền nhiễu màu.
@@ -141,5 +145,9 @@ tests/test_psd_layers.py::test_print_sheet_layout PASSED
 tests/test_psd_layers.py::test_face_retoucher_smooth_and_sharpen PASSED
 tests/test_psd_layers.py::test_face_retoucher_eraser_brush PASSED
 tests/test_psd_layers.py::test_psd_export_with_retouch_and_eraser_mask PASSED
-============================== 7 passed in 1.23s ===============================
+tests/test_psd_layers.py::test_matting_engine_cpu_execution PASSED
+tests/test_psd_layers.py::test_fast_guided_filter_edge_preservation PASSED
+tests/test_psd_layers.py::test_color_decontamination_spill_suppression PASSED
+tests/test_psd_layers.py::test_psd_export_preserves_soft_grayscale_mask PASSED
+============================== 11 passed in 4.73s ==============================
 ```

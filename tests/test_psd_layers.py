@@ -8,7 +8,12 @@ import psd_tools
 from psd_tools.constants import Resource
 
 from app.core.face_aligner import FaceAligner
-from app.core.matting import MattingEngine, hex_to_rgb
+from app.core.matting import (
+    MattingEngine,
+    decontaminate_color,
+    fast_guided_filter,
+    hex_to_rgb,
+)
 from app.core.psd_builder import PSDBuilder
 from app.core.retouch import FaceRetoucher
 
@@ -226,4 +231,117 @@ def test_psd_export_with_retouch_and_eraser_mask(sample_data):
         assert mask_np[cy, cx] == 0, "Erased spot should be transparent (0) in PSD LayerMask"
         # Edge outside erased circle but inside original mask should be 255
         assert mask_np[cy, cx - 80] == 255
+
+
+def test_matting_engine_cpu_execution():
+    """Verify MattingEngine operates purely on CPU via ONNX Runtime and extracts 8-bit soft matte."""
+    engine = MattingEngine()
+    assert engine._session is not None, "ONNX InferenceSession should be initialized"
+    providers = engine._session.get_providers()
+    assert "CPUExecutionProvider" in providers, "Engine MUST run on CPUExecutionProvider"
+
+    # Synthetic portrait
+    img = np.full((320, 240, 3), 235, dtype=np.uint8)
+    img[40:280, 40:200] = [50, 40, 30]
+
+    raw_prob = engine.extract_raw_probability(img)
+    assert raw_prob.shape == (320, 240)
+    assert 0.0 <= raw_prob.min() <= raw_prob.max() <= 1.0
+
+    mask = engine.extract_alpha_matte(img, refine_edges=True, radius=6, eps=1e-4)
+    assert mask.shape == (320, 240)
+    assert mask.dtype == np.uint8
+    assert mask.min() >= 0 and mask.max() <= 255
+
+
+def test_fast_guided_filter_edge_preservation():
+    """Verify Fast Guided Filter transfers high-resolution guide gradients onto the matte."""
+    h, w = 200, 200
+    guide_gray = np.full((h, w), 240, dtype=np.uint8)
+    # Dark sharp edge
+    guide_gray[:, :100] = 20
+
+    # Coarse blurred probability mask
+    coarse_prob = np.zeros((h, w), dtype=np.float32)
+    coarse_prob[:, :100] = 1.0
+    import cv2
+    coarse_blurred = cv2.GaussianBlur(coarse_prob, (21, 21), 7.0)
+
+    # Apply Fast Guided Filter
+    refined = fast_guided_filter(guide=guide_gray, src=coarse_blurred, radius=6, eps=1e-4)
+    assert refined.shape == (h, w)
+    assert 0.0 <= refined.min() <= refined.max() <= 1.0
+
+    # Refined transition at edge boundary (x=98 to 102) should be substantially sharper than blurred input
+    blurred_diff = abs(coarse_blurred[100, 95] - coarse_blurred[100, 105])
+    refined_diff = abs(refined[100, 95] - refined[100, 105])
+    assert refined_diff > blurred_diff, "Guided filter should sharpen boundary aligned with guide edge"
+
+
+def test_color_decontamination_spill_suppression():
+    """Verify color decontamination removes background color bleed in semi-transparent edges."""
+    h, w = 100, 100
+    bg_blue = np.array([20, 120, 240], dtype=np.uint8)
+    hair_dark = np.array([35, 30, 25], dtype=np.uint8)
+
+    # Edge pixel: 50% alpha, 50% blue spill
+    contaminated_img = np.full((h, w, 3), bg_blue, dtype=np.uint8)
+    alpha = np.zeros((h, w), dtype=np.uint8)
+
+    # Center is solid hair
+    contaminated_img[30:70, 30:70] = hair_dark
+    alpha[30:70, 30:70] = 255
+
+    # Ring around center is transition zone with blue spill
+    for y in range(20, 80):
+        for x in range(20, 80):
+            if not (30 <= y < 70 and 30 <= x < 70):
+                alpha[y, x] = 128  # 50% alpha
+                # Blend hair with blue background
+                contaminated_img[y, x] = (hair_dark * 0.5 + bg_blue * 0.5).astype(np.uint8)
+
+    decon = decontaminate_color(contaminated_img, alpha, bg_color_hint=tuple(bg_blue))
+    assert decon.shape == (h, w, 3)
+
+    # Check a transition pixel: blue channel should be drastically suppressed toward hair color
+    edge_pixel_before = contaminated_img[25, 25]
+    edge_pixel_after = decon[25, 25]
+    assert edge_pixel_after[2] < edge_pixel_before[2], "Blue channel in transition edge should be decontaminated"
+
+
+def test_psd_export_preserves_soft_grayscale_mask(sample_data):
+    """Verify that exported PSD Layer 2 contains the full 8-bit soft grayscale mask (not binarized)."""
+    portrait, _ = sample_data
+    h, w = portrait.shape[:2]
+
+    # Create synthetic soft gradient mask with intermediate grayscale values
+    y, x = np.ogrid[:h, :w]
+    dist = np.sqrt((x - w // 2) ** 2 + (y - h // 2) ** 2)
+    soft_mask = np.clip(255 - dist * 1.5, 0, 255).astype(np.uint8)
+
+    # Verify mask has intermediate values
+    intermediate = np.sum((soft_mask > 30) & (soft_mask < 225))
+    assert intermediate > 1000, "Mask should have soft gradient transitions"
+
+    builder = PSDBuilder()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        out_file = os.path.join(tmpdir, "soft_mask_test.psd")
+        builder.export_id_photo(
+            rgb_portrait=portrait,
+            alpha_mask=soft_mask,
+            output_path=out_file,
+            bg_color="#FFFFFF"
+        )
+
+        assert os.path.exists(out_file)
+        psd = psd_tools.PSDImage.open(out_file)
+        p_layer = psd[1]
+        assert p_layer.has_mask()
+        layer_mask_np = np.array(p_layer.mask.topil())
+
+        # Assert LayerMask is 8-bit and retains intermediate soft values exactly
+        assert layer_mask_np.shape == (h, w)
+        assert layer_mask_np.dtype == np.uint8
+        np.testing.assert_array_equal(layer_mask_np, soft_mask)
+
 
